@@ -7,9 +7,8 @@ const HistorySchema = new Schema(
             ref: "Media",
             required: true
         },
-        user_id: {
-            type: Schema.Types.ObjectId,
-            ref: "User",
+        viewed_by_ip: {
+            type: String,
             required: true
         },
         timestamp: {
