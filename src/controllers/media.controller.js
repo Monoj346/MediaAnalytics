@@ -25,11 +25,10 @@ const publishMedia = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Media file not uploaded properly");
     }
 
-    // Save metadata in MongoDB
     const media = await Media.create({
         title,
         type,
-        file_url: mediaFile.secure_url  // <-- use secure_url
+        file_url: mediaFile.secure_url 
     });
 
     return res

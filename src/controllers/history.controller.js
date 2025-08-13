@@ -3,112 +3,96 @@ import asyncHandler from "../utils/asyncHandler.js";
 import ApiError from "../utils/apiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import { History } from "../models/history.model.js";
+import redisClient from "../db/redisClient.js";
 
-/**
- * Log a media view (stores media_id and viewer's IP)
- */
+const RATE_LIMIT_WINDOW = 10;
+
 const logMediaView = asyncHandler(async (req, res) => {
     const mediaId = req.params.id;
 
-    // Validate media ID
     if (!mongoose.Types.ObjectId.isValid(mediaId)) {
         throw new ApiError(400, "Invalid media ID");
     }
 
-    // Get IP address (handles proxies)
-    const ip =
+    let ip =
         req.headers["x-forwarded-for"]?.split(",")[0] ||
         req.socket?.remoteAddress ||
         req.ip;
+    ip = ip.includes("::1") ? "127.0.0.1" : ip;
 
     if (!ip) {
         throw new ApiError(400, "Could not determine IP address");
     }
 
-    // Save to DB
+    const rateLimitKey = `view:${mediaId}:${ip}`;
+
+
+    const alreadyViewed = await redisClient.get(rateLimitKey);
+    // console.log("alreadyViewed?", alreadyViewed, "for key", rateLimitKey);
+
+    if (alreadyViewed) {
+        throw new ApiError(429, "Too many requests. Please try again later.");
+    }
+
+ 
     const historyEntry = await History.create({
         media_id: mediaId,
         viewed_by_ip: ip
     });
+
+
+    await redisClient.set(rateLimitKey, "1", { EX: RATE_LIMIT_WINDOW });
+    const ttl = await redisClient.ttl(rateLimitKey);
+    // console.log("Rate limit key set:", rateLimitKey, "TTL:", ttl);
 
     return res
         .status(201)
         .json(new ApiResponse(201, historyEntry, "View logged successfully"));
 });
 
-/**
- * Get analytics for a specific media
- */
 const getMediaAnalytics = asyncHandler(async (req, res) => {
-    const mediaId = req.params.id;
+    const { id } = req.params;
 
-    // Validate media ID
-    if (!mongoose.Types.ObjectId.isValid(mediaId)) {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
         throw new ApiError(400, "Invalid media ID");
     }
 
-    const analytics = await History.aggregate([
-        {
-            $match: { media_id: new mongoose.Types.ObjectId(mediaId) }
-        },
-        {
-            $group: {
-                _id: null,
-                total_views: { $sum: 1 },
-                unique_ips: { $addToSet: "$viewed_by_ip" },
-                views_per_day: {
-                    $push: {
-                        date: {
-                            $dateToString: { format: "%Y-%m-%d", date: "$timestamp" }
-                        }
-                    }
-                }
-            }
-        },
-        {
-            $project: {
-                _id: 0,
-                total_views: 1,
-                unique_ips: { $size: "$unique_ips" },
-                views_per_day: {
-                    $arrayToObject: {
-                        $map: {
-                            input: { $setUnion: ["$views_per_day.date", []] },
-                            as: "d",
-                            in: {
-                                k: "$$d",
-                                v: {
-                                    $size: {
-                                        $filter: {
-                                            input: "$views_per_day",
-                                            as: "vpd",
-                                            cond: { $eq: ["$$vpd.date", "$$d"] }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    ]);
-
-    if (!analytics.length) {
+  
+    const cachedData = await redisClient.get(`analytics:${id}`);
+    if (cachedData) {
         return res
             .status(200)
-            .json(
-                new ApiResponse(200, {
-                    total_views: 0,
-                    unique_ips: 0,
-                    views_per_day: {}
-                }, "No analytics data available")
-            );
+            .json(new ApiResponse(200, JSON.parse(cachedData), "Fetched from cache"));
     }
 
-    return res
-        .status(200)
-        .json(new ApiResponse(200, analytics[0], "Analytics fetched successfully"));
+    const totalViews = await History.countDocuments({ media_id: id });
+    const uniqueIps = await History.distinct("viewed_by_ip", { media_id: id });
+
+    const viewsPerDayData = await History.aggregate([
+        { $match: { media_id: new mongoose.Types.ObjectId(id) } },
+        {
+            $group: {
+                _id: { $dateToString: { format: "%Y-%m-%d", date: "$timestamp" } },
+                count: { $sum: 1 }
+            }
+        },
+        { $sort: { _id: 1 } }
+    ]);
+
+    const viewsPerDay = {};
+    viewsPerDayData.forEach(v => {
+        viewsPerDay[v._id] = v.count;
+    });
+
+    const analyticsData = {
+        total_views: totalViews,
+        unique_ips: uniqueIps.length,
+        views_per_day: viewsPerDay
+    };
+
+    await redisClient.setEx(`analytics:${id}`, 3600, JSON.stringify(analyticsData));
+
+    return res.status(200).json(new ApiResponse(200, analyticsData, "Fetched from database"));
 });
 
 export { logMediaView, getMediaAnalytics };
