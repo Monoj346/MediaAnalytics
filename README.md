@@ -58,7 +58,7 @@ redis-server
 
 Check Connection:
 redis-cli ping
-# PONG
+PONG means the connection is done..
 
 5️⃣ Run the Server
 npm run dev
