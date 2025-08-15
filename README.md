@@ -51,7 +51,6 @@ CLOUDINARY_CLOUD_KEY=your_cloud_key
 CLOUDINARY_CLOUD_SECRET=your_cloud_secret
 
 4️⃣ Start Redis
-
 On Windows (with Redis installed):
 
 redis-server
@@ -64,7 +63,36 @@ redis-cli ping
 5️⃣ Run the Server
 npm run dev
 
+🐳 Docker Setup
+1️⃣ Build Docker Image
+
+Make sure you have a Dockerfile in the project root. Then run:
+docker build -t mediaanalytics-backend .
+
+2️⃣ Run Redis Container
+docker run -d --name redis-server -p 6379:6379 redis:7
+
+3️⃣ Run Backend Container
+docker run -p 8000:8000 --env-file .env --name mediaanalytics-c mediaanalytics-backend
+
+
+Notes:
+
+Ensure .env contains REDIS_URL=redis://host.docker.internal:6379 (for Windows/Mac)
+
+If you already have a container named mediaanalytics-c, remove it first:
+docker rm -f mediaanalytics-c
+
+4️⃣ Access the App
+
+Backend will be available at: http://localhost:8000
+Redis and MongoDB are now connected and your backend runs fully inside Docker.
+
+✅ Summary
+
+Redis and backend run in separate containers.
+Backend reads .env to connect to Redis, MongoDB, and Cloudinary.
+Docker allows you to deploy the backend anywhere without manual setup.
 
 Your backend will be live on:
-
 http://localhost:8000
